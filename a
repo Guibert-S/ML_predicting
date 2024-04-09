@@ -1,0 +1,114 @@
+import optuna
+import numpy as np
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.metrics import f1_score, accuracy_score, recall_score
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+
+# Supposons que X, y sont déjà définis
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+
+def optimize_hyperparameters(model_name, X_train, y_train, n_trials=10):
+    def objective(trial):
+        preprocessor = SelectKBest(f_classif, k=7)
+
+        if model_name == 'RandomForest':
+            model = RandomForestClassifier(random_state=42)
+            n_estimators = trial.suggest_int('n_estimators', 100, 500)
+            max_depth = trial.suggest_int('max_depth', 5, 20)
+            model.set_params(n_estimators=n_estimators, max_depth=max_depth)
+
+        elif model_name == 'AdaBoost':
+            model = AdaBoostClassifier(random_state=42)
+            n_estimators = trial.suggest_int('n_estimators', 50, 300)
+            learning_rate = trial.suggest_float('learning_rate', 0.01, 1.0)
+            model.set_params(n_estimators=n_estimators, learning_rate=learning_rate)
+
+        elif model_name == 'KNN':
+            scaler = StandardScaler()
+            n_neighbors = trial.suggest_int('n_neighbors', 3, 30)
+            model = KNeighborsClassifier(n_neighbors=n_neighbors)
+
+        elif model_name == 'SVM':
+            scaler = StandardScaler()
+            C = trial.suggest_float('C', 0.01, 10.0)
+            model = SVC(random_state=42, C=C)
+
+        elif model_name == 'XGB':
+            model = XGBClassifier(random_state=42)
+            n_estimators = trial.suggest_int('n_estimators', 100, 500)
+            max_depth = trial.suggest_int('max_depth', 3, 20)
+            learning_rate = trial.suggest_float('learning_rate', 0.01, 0.3)
+            model.set_params(n_estimators=n_estimators, max_depth=max_depth, learning_rate=learning_rate)
+
+        elif model_name == 'LGBM':
+            model = LGBMClassifier(random_state=42)
+            n_estimators = trial.suggest_int('n_estimators', 100, 500)
+            num_leaves = trial.suggest_int('num_leaves', 31, 200)
+            model.set_params(n_estimators=n_estimators, num_leaves=num_leaves)
+
+        elif model_name == 'Logistic':
+            scaler = StandardScaler()
+            C = trial.suggest_float('C', 0.01, 10.0)
+            model = LogisticRegression(random_state=42, C=C)
+
+        else:
+            raise NotImplementedError()
+
+        if model_name in ['KNN', 'SVM', 'Logistic']:
+            pipeline = make_pipeline(preprocessor, scaler, model)
+        else:
+            pipeline = make_pipeline(preprocessor, model)
+
+        score = cross_val_score(pipeline, X_train, y_train, n_jobs=-1, cv=5, scoring='f1').mean()
+        return score
+
+    study = optuna.create_study(direction='maximize')
+    study.optimize(objective, n_trials=n_trials)
+    
+    # Utiliser les meilleurs hyperparamètres pour créer le pipeline final
+    if model_name in ['KNN', 'SVM', 'Logistic']:
+        scaler = StandardScaler()
+        best_model = model_class(**study.best_params)
+        pipeline = make_pipeline(preprocessor, scaler, best_model)
+    else:
+        best_model = model_class(**study.best_params)
+        pipeline = make_pipeline(preprocessor, best_model)
+
+    pipeline.fit(X_train, y_train)
+
+    return pipeline
+
+# Dictionnaire des noms des modèles
+model_names = ['RandomForest', 'AdaBoost', 'KNN', 'SVM', 'XGB', 'LGBM', 'Logistic']
+
+def evaluate_models(model_names, X_train, y_train, X_val, y_val):
+    results = {}
+    for model_name in model_names:
+        print(f"Optimizing and evaluating {model_name}")
+        best_pipeline = optimize_hyperparameters(model_name, X_train, y_train)
+
+        # Évaluation sur l'ensemble de validation
+        y_pred = best_pipeline.predict(X_val)
+        accuracy = accuracy_score(y_val, y_pred)
+        f1 = f1_score(y_val, y_pred)
+        recall = recall_score(y_val, y_pred)
+
+        results[model_name] = {'accuracy': accuracy, 'f1': f1, 'recall': recall}
+
+    return results
+
+# Exécuter l'évaluation des modèles
+evaluation_results = evaluate_models(model_names, X_train, y_train, X_val, y_val)
+
+# Affichage des résultats
+for model_name, metrics in evaluation_results.items():
+    print(f"\nResults for {model_name}:")
+    for metric_name, metric_value in metrics.items():
+        print(f"{metric_name}: {metric_value:.2f}")
